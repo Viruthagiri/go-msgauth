@@ -24,6 +24,13 @@ const (
 	ResultSoftFail              = "softfail"
 )
 
+type Parsed struct {
+	Identifier string
+	Instance int
+	Results []Result
+	Error error
+}
+
 // Result is an authentication result.
 type Result interface {
 	parse(value ResultValue, params map[string]string)
@@ -223,34 +230,39 @@ var results = map[string]newResultFunc{
 
 // Parse parses the provided Authentication-Results header field. It returns the
 // authentication service identifier and authentication results.
-func Parse(v string) (identifier string, results []Result, err error) {
+func Parse(v string) *Parsed {
+	var parResults []Result
+	parsed := &Parsed{}
 	parts := strings.Split(v, ";")
-
 	start := 1
-	identifier = strings.TrimSpace(parts[0])
-	if strings.HasPrefix(identifier, "i=") {
+	parsed.Identifier = strings.TrimSpace(parts[0])
+	if strings.HasPrefix(parsed.Identifier, "i=") {
 		// We are dealing with ARC-Authentication-Results
 		// https://www.rfc-editor.org/rfc/rfc8617.html#section-4.2.1
 		// Let's make sure
-		kv := strings.SplitN(identifier, "=", 2)
+		kv := strings.SplitN(parsed.Identifier, "=", 2)
 		if len(kv) == 2 {
-			instance, err := strconv.Atoi(kv[1])
+			ins, err := strconv.Atoi(kv[1])
 			// Instance tag values can range from 1-50 (inclusive).
-			if err == nil && instance > 0 && instance <= 50  {
-				identifier = strings.TrimSpace(parts[1])
+			if err == nil && ins > 0 && ins <= 50  {
+				parsed.Instance = ins
+				parsed.Identifier = strings.TrimSpace(parts[1])
 				start = 2
 			}
 		}
 	}
-	i := strings.IndexFunc(identifier, unicode.IsSpace)
+	i := strings.IndexFunc(parsed.Identifier, unicode.IsSpace)
 	if i > 0 {
 		// Authentication-Results: example.org 1;
-		version := strings.TrimSpace(identifier[i:])
+		version := strings.TrimSpace(parsed.Identifier[i:])
 		if version != "1" {
-			return "", nil, errors.New("msgauth: unsupported version")
+			parsed.Identifier = ""
+			parsed.Results = nil
+			parsed.Error = errors.New("msgauth: unsupported version")
+			return parsed
 		}
 
-		identifier = identifier[:i]
+		parsed.Identifier = parsed.Identifier[:i]
 	}
 
 
@@ -262,13 +274,16 @@ func Parse(v string) (identifier string, results []Result, err error) {
 
 		result, err := parseResult(s)
 		if err != nil {
-			return identifier, results, err
+			parsed.Results = parResults
+			parsed.Error = err
+			return parsed
 		}
 		if result != nil {
-			results = append(results, result)
+			parResults = append(parResults, result)
+			parsed.Results = parResults
 		}
 	}
-	return
+	return parsed
 }
 
 func parseResult(s string) (Result, error) {
